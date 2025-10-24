@@ -14,6 +14,9 @@ import (
 func createDecoderOfRecord(d *decoderContext, schema Schema, typ reflect2.Type) ValDecoder {
 	switch typ.Kind() {
 	case reflect.Struct:
+		if dec := createDecoderOfProtobuf(schema, typ); dec != nil {
+			return dec
+		}
 		if dec := createDecoderOfAvroMarshaler(schema, typ); dec != nil {
 			return dec
 		}
@@ -41,6 +44,9 @@ func createDecoderOfRecord(d *decoderContext, schema Schema, typ reflect2.Type) 
 func createEncoderOfRecord(e *encoderContext, schema *RecordSchema, typ reflect2.Type) ValEncoder {
 	switch typ.Kind() {
 	case reflect.Struct:
+		if enc := createEncoderOfProtobuf(schema, typ); enc != nil {
+			return enc
+		}
 		if enc := createEncoderOfAvroMarshaler(schema, typ); enc != nil {
 			return enc
 		}

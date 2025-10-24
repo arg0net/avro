@@ -371,6 +371,185 @@ For types where the pointer implements `RecordMarshaler` (pointer receiver metho
 
 Custom marshalers use the same efficient `Writer` and `Reader` infrastructure as the standard codecs, so there is minimal performance overhead.
 
+## Protobuf Message Support
+
+The library automatically supports protobuf messages without requiring explicit marshaler implementation. When a type implements `proto.Message`, the library uses protobuf reflection to automatically serialize/deserialize the message according to the Avro schema.
+
+### How It Works
+
+- **Automatic Detection**: The library automatically detects types that implement `proto.Message` interface
+- **Field Mapping**: Protobuf fields are mapped to Avro schema fields by name
+- **Type Conversion**: Protobuf types are automatically converted to corresponding Avro types
+- **Priority**: Protobuf detection occurs before checking for `RecordMarshaler`/`RecordUnmarshaler`
+
+### Example Protobuf Definition
+
+```protobuf
+syntax = "proto3";
+
+message User {
+  int32 id = 1;
+  string name = 2;
+  string email = 3;
+  repeated string tags = 4;
+}
+```
+
+### Corresponding Avro Schema
+
+```json
+{
+    "type": "record",
+    "name": "User",
+    "fields": [
+        {"name": "id", "type": "int"},
+        {"name": "name", "type": "string"},
+        {"name": "email", "type": "string"},
+        {"name": "tags", "type": {"type": "array", "items": "string"}}
+    ]
+}
+```
+
+### Usage Example
+
+```go
+import (
+    "github.com/hamba/avro/v2"
+    pb "your/protobuf/package"
+)
+
+// Create protobuf message
+user := &pb.User{
+    Id:    42,
+    Name:  "John Doe",
+    Email: "john@example.com",
+    Tags:  []string{"developer", "golang"},
+}
+
+// Marshal to Avro (works automatically!)
+data, err := avro.Marshal(schema, user)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Unmarshal from Avro
+var decoded pb.User
+err = avro.Unmarshal(schema, data, &decoded)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Type Mapping
+
+| Protobuf Type | Avro Type |
+|--------------|-----------|
+| int32, sint32, sfixed32 | int |
+| int64, sint64, sfixed64 | long |
+| uint32, fixed32 | int |
+| uint64, fixed64 | long |
+| float | float |
+| double | double |
+| bool | boolean |
+| string | string |
+| bytes | bytes |
+| message | record |
+| repeated T | array |
+| map<string,V> | map |
+| enum | int or string |
+
+### Supported Features
+
+- **Nested Messages**: Protobuf messages can contain other messages
+- **Repeated Fields**: Protobuf repeated fields map to Avro arrays
+- **Map Fields**: Protobuf maps map to Avro maps (keys must be strings)
+- **Enum Fields**: Can be encoded as either int (enum number) or string (enum name)
+- **All Numeric Types**: All protobuf integer and floating-point types are supported
+- **Optional Fields**: Proto3 optional fields automatically map to Avro nullable unions
+
+### Limitations
+
+- Field names must match exactly between protobuf definition and Avro schema
+- Oneof fields require careful schema design (typically map to nullable unions)
+- Map keys must be strings (protobuf limitation for complex key types)
+
+### Nested Messages Example
+
+```protobuf
+message Article {
+  int32 id = 1;
+  string title = 2;
+  User author = 3;
+}
+```
+
+```json
+{
+    "type": "record",
+    "name": "Article",
+    "fields": [
+        {"name": "id", "type": "int"},
+        {"name": "title", "type": "string"},
+        {
+            "name": "author",
+            "type": {
+                "type": "record",
+                "name": "User",
+                "fields": [
+                    {"name": "id", "type": "int"},
+                    {"name": "name", "type": "string"},
+                    {"name": "email", "type": "string"}
+                ]
+            }
+        }
+    ]
+}
+```
+
+This works automatically - the library recursively handles nested protobuf messages.
+
+### Optional Fields Example
+
+Proto3 optional fields are automatically detected and mapped to Avro nullable unions:
+
+```protobuf
+message Profile {
+  int32 id = 1;
+  optional string bio = 2;
+  optional int32 age = 3;
+}
+```
+
+```json
+{
+    "type": "record",
+    "name": "Profile",
+    "fields": [
+        {"name": "id", "type": "int"},
+        {"name": "bio", "type": ["null", "string"]},
+        {"name": "age", "type": ["null", "int"]}
+    ]
+}
+```
+
+When optional fields are not set in the protobuf message, they are encoded as null in Avro. When decoding, null values result in the field not being set (using protobuf's field presence tracking).
+
+```go
+// Create message with optional fields
+bio := "Software Engineer"
+profile := &pb.Profile{
+    Id:  1,
+    Bio: &bio,
+    // Age is not set (will be null)
+}
+
+// Encode and decode - Age remains unset
+data, _ := avro.Marshal(schema, profile)
+var decoded pb.Profile
+avro.Unmarshal(schema, data, &decoded)
+// decoded.Age will be nil
+```
+
 ## Testing
 
 The implementation includes comprehensive tests covering:
@@ -380,6 +559,7 @@ The implementation includes comprehensive tests covering:
 - Round-trip encoding/decoding
 - Integration with encoders/decoders
 - External package usage
+- Protobuf messages (basic, nested, arrays, maps, enums, optional fields)
 
-See `codec_marshaler_avro_test.go` and `example_external_package_test.go` for test examples.
+See `codec_marshaler_avro_test.go`, `example_external_package_test.go`, and `codec_protobuf_test.go` for test examples.
 

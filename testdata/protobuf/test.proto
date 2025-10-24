@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package testpb;
+
+option go_package = "github.com/hamba/avro/v2/testdata/protobuf;testpb";
+
+// BasicMessage is a simple message for testing basic types
+message BasicMessage {
+  int32 id = 1;
+  string name = 2;
+  bool active = 3;
+  double score = 4;
+}
+
+// NestedMessage contains a nested message
+message NestedMessage {
+  int32 id = 1;
+  string title = 2;
+  BasicMessage author = 3;
+}
+
+// ListMessage contains repeated fields
+message ListMessage {
+  int32 id = 1;
+  repeated string tags = 2;
+  repeated int32 numbers = 3;
+}
+
+// MapMessage contains map fields
+message MapMessage {
+  int32 id = 1;
+  map<string, string> labels = 2;
+  map<string, int32> scores = 3;
+}
+
+// AllTypesMessage tests various types
+message AllTypesMessage {
+  int32 int32_field = 1;
+  int64 int64_field = 2;
+  uint32 uint32_field = 3;
+  uint64 uint64_field = 4;
+  sint32 sint32_field = 5;
+  sint64 sint64_field = 6;
+  fixed32 fixed32_field = 7;
+  fixed64 fixed64_field = 8;
+  sfixed32 sfixed32_field = 9;
+  sfixed64 sfixed64_field = 10;
+  float float_field = 11;
+  double double_field = 12;
+  bool bool_field = 13;
+  string string_field = 14;
+  bytes bytes_field = 15;
+}
+
+// OptionalMessage contains optional fields
+message OptionalMessage {
+  int32 id = 1;
+  optional string name = 2;
+  optional int32 age = 3;
+}
+
+// EnumMessage contains an enum field
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_ACTIVE = 1;
+  STATUS_INACTIVE = 2;
+}
+
+message EnumMessage {
+  int32 id = 1;
+  Status status = 2;
+}
+
