@@ -345,3 +345,267 @@ func TestEncoder_Protobuf_WithEncodingConfig(t *testing.T) {
 	assert.Equal(t, original.Active, decoded.Active)
 	assert.Equal(t, original.Score, decoded.Score)
 }
+
+func TestEncoder_Protobuf_OneofWithNestedStructs(t *testing.T) {
+	schema := `{
+		"type": "record",
+		"name": "OneofWithMessageMessage",
+		"fields": [
+			{"name": "id", "type": "int"},
+			{
+				"name": "data",
+				"type": [
+					"null",
+					"string",
+					{
+						"type": "record",
+						"name": "BasicMessage",
+						"fields": [
+							{"name": "id", "type": "int"},
+							{"name": "name", "type": "string"},
+							{"name": "active", "type": "boolean"},
+							{"name": "score", "type": "double"}
+						]
+					},
+					{
+						"type": "record",
+						"name": "SimpleProfile",
+						"fields": [
+							{"name": "user_id", "type": "int"},
+							{"name": "bio", "type": "string"},
+							{"name": "followers", "type": "int"}
+						]
+					}
+				]
+			}
+		]
+	}`
+
+	tests := []struct {
+		name     string
+		message  *testpb.OneofWithMessageMessage
+		validate func(t *testing.T, decoded *testpb.OneofWithMessageMessage)
+	}{
+		{
+			name: "string variant",
+			message: &testpb.OneofWithMessageMessage{
+				Id:   1,
+				Data: &testpb.OneofWithMessageMessage_Description{Description: "test description"},
+			},
+			validate: func(t *testing.T, decoded *testpb.OneofWithMessageMessage) {
+				assert.Equal(t, int32(1), decoded.Id)
+				desc, ok := decoded.Data.(*testpb.OneofWithMessageMessage_Description)
+				require.True(t, ok, "expected Description variant")
+				assert.Equal(t, "test description", desc.Description)
+			},
+		},
+		{
+			name: "BasicMessage variant",
+			message: &testpb.OneofWithMessageMessage{
+				Id: 2,
+				Data: &testpb.OneofWithMessageMessage_User{
+					User: &testpb.BasicMessage{
+						Id:     10,
+						Name:   "John Doe",
+						Active: true,
+						Score:  95.5,
+					},
+				},
+			},
+			validate: func(t *testing.T, decoded *testpb.OneofWithMessageMessage) {
+				assert.Equal(t, int32(2), decoded.Id)
+				user, ok := decoded.Data.(*testpb.OneofWithMessageMessage_User)
+				require.True(t, ok, "expected User variant")
+				require.NotNil(t, user.User)
+				assert.Equal(t, int32(10), user.User.Id)
+				assert.Equal(t, "John Doe", user.User.Name)
+				assert.Equal(t, true, user.User.Active)
+				assert.Equal(t, 95.5, user.User.Score)
+			},
+		},
+		{
+			name: "SimpleProfile variant",
+			message: &testpb.OneofWithMessageMessage{
+				Id: 3,
+				Data: &testpb.OneofWithMessageMessage_Profile{
+					Profile: &testpb.SimpleProfile{
+						UserId:    100,
+						Bio:       "Software Developer",
+						Followers: 1500,
+					},
+				},
+			},
+			validate: func(t *testing.T, decoded *testpb.OneofWithMessageMessage) {
+				assert.Equal(t, int32(3), decoded.Id)
+				profile, ok := decoded.Data.(*testpb.OneofWithMessageMessage_Profile)
+				require.True(t, ok, "expected Profile variant")
+				require.NotNil(t, profile.Profile)
+				assert.Equal(t, int32(100), profile.Profile.UserId)
+				assert.Equal(t, "Software Developer", profile.Profile.Bio)
+				assert.Equal(t, int32(1500), profile.Profile.Followers)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Encode with OCF
+			buf := &bytes.Buffer{}
+			enc, err := ocf.NewEncoder(schema, buf)
+			require.NoError(t, err)
+
+			err = enc.Encode(tt.message)
+			require.NoError(t, err)
+
+			err = enc.Close()
+			require.NoError(t, err)
+
+			// Decode with OCF
+			dec, err := ocf.NewDecoder(buf)
+			require.NoError(t, err)
+
+			require.True(t, dec.HasNext())
+			var decoded testpb.OneofWithMessageMessage
+			err = dec.Decode(&decoded)
+			require.NoError(t, err)
+
+			// Validate
+			tt.validate(t, &decoded)
+
+			require.False(t, dec.HasNext())
+			require.NoError(t, dec.Error())
+		})
+	}
+}
+
+func TestEncoder_Protobuf_OneofWithNestedStructs_Multiple(t *testing.T) {
+	schema := `{
+		"type": "record",
+		"name": "OneofWithMessageMessage",
+		"fields": [
+			{"name": "id", "type": "int"},
+			{
+				"name": "data",
+				"type": [
+					"null",
+					"string",
+					{
+						"type": "record",
+						"name": "BasicMessage",
+						"fields": [
+							{"name": "id", "type": "int"},
+							{"name": "name", "type": "string"},
+							{"name": "active", "type": "boolean"},
+							{"name": "score", "type": "double"}
+						]
+					},
+					{
+						"type": "record",
+						"name": "SimpleProfile",
+						"fields": [
+							{"name": "user_id", "type": "int"},
+							{"name": "bio", "type": "string"},
+							{"name": "followers", "type": "int"}
+						]
+					}
+				]
+			}
+		]
+	}`
+
+	// Create multiple messages with different variants
+	messages := []*testpb.OneofWithMessageMessage{
+		{
+			Id:   1,
+			Data: &testpb.OneofWithMessageMessage_Description{Description: "first"},
+		},
+		{
+			Id: 2,
+			Data: &testpb.OneofWithMessageMessage_User{
+				User: &testpb.BasicMessage{Id: 10, Name: "User 1", Active: true, Score: 90.0},
+			},
+		},
+		{
+			Id: 3,
+			Data: &testpb.OneofWithMessageMessage_Profile{
+				Profile: &testpb.SimpleProfile{
+					UserId:    200,
+					Bio:       "Data Scientist",
+					Followers: 2500,
+				},
+			},
+		},
+		{
+			Id:   4,
+			Data: &testpb.OneofWithMessageMessage_Description{Description: "second"},
+		},
+		{
+			Id: 5,
+			Data: &testpb.OneofWithMessageMessage_User{
+				User: &testpb.BasicMessage{Id: 40, Name: "User 2", Active: false, Score: 75.5},
+			},
+		},
+	}
+
+	// Encode with OCF
+	buf := &bytes.Buffer{}
+	enc, err := ocf.NewEncoder(schema, buf)
+	require.NoError(t, err)
+
+	for _, msg := range messages {
+		err = enc.Encode(msg)
+		require.NoError(t, err)
+	}
+
+	err = enc.Close()
+	require.NoError(t, err)
+
+	// Decode with OCF
+	dec, err := ocf.NewDecoder(buf)
+	require.NoError(t, err)
+
+	var decoded []*testpb.OneofWithMessageMessage
+	for dec.HasNext() {
+		var msg testpb.OneofWithMessageMessage
+		err = dec.Decode(&msg)
+		require.NoError(t, err)
+		decoded = append(decoded, &msg)
+	}
+
+	require.NoError(t, dec.Error())
+	require.Len(t, decoded, 5)
+
+	// Verify first message (string variant)
+	assert.Equal(t, int32(1), decoded[0].Id)
+	desc1, ok := decoded[0].Data.(*testpb.OneofWithMessageMessage_Description)
+	require.True(t, ok)
+	assert.Equal(t, "first", desc1.Description)
+
+	// Verify second message (BasicMessage variant)
+	assert.Equal(t, int32(2), decoded[1].Id)
+	user1, ok := decoded[1].Data.(*testpb.OneofWithMessageMessage_User)
+	require.True(t, ok)
+	assert.Equal(t, int32(10), user1.User.Id)
+	assert.Equal(t, "User 1", user1.User.Name)
+
+	// Verify third message (SimpleProfile variant)
+	assert.Equal(t, int32(3), decoded[2].Id)
+	profile1, ok := decoded[2].Data.(*testpb.OneofWithMessageMessage_Profile)
+	require.True(t, ok)
+	assert.Equal(t, int32(200), profile1.Profile.UserId)
+	assert.Equal(t, "Data Scientist", profile1.Profile.Bio)
+	assert.Equal(t, int32(2500), profile1.Profile.Followers)
+
+	// Verify fourth message (string variant)
+	assert.Equal(t, int32(4), decoded[3].Id)
+	desc2, ok := decoded[3].Data.(*testpb.OneofWithMessageMessage_Description)
+	require.True(t, ok)
+	assert.Equal(t, "second", desc2.Description)
+
+	// Verify fifth message (BasicMessage variant)
+	assert.Equal(t, int32(5), decoded[4].Id)
+	user2, ok := decoded[4].Data.(*testpb.OneofWithMessageMessage_User)
+	require.True(t, ok)
+	assert.Equal(t, int32(40), user2.User.Id)
+	assert.Equal(t, "User 2", user2.User.Name)
+}

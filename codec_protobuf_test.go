@@ -1202,3 +1202,68 @@ func TestProtobuf_ExtraComplexFieldsInAvro(t *testing.T) {
 	assert.Equal(t, false, decoded.Active)
 	assert.Equal(t, 88.5, decoded.Score)
 }
+
+func TestProtobuf_OneofWithMessageMessage_Profile(t *testing.T) {
+	defer ConfigTeardown()
+
+	schema := `{
+		"type": "record",
+		"name": "OneofWithMessageMessage",
+		"fields": [
+			{"name": "id", "type": "int"},
+			{
+				"name": "data",
+				"type": [
+					"null",
+					"string",
+					{
+						"type": "record",
+						"name": "BasicMessage",
+						"fields": [
+							{"name": "id", "type": "int"},
+							{"name": "name", "type": "string"},
+							{"name": "active", "type": "boolean"},
+							{"name": "score", "type": "double"}
+						]
+					},
+					{
+						"type": "record",
+						"name": "SimpleProfile",
+						"fields": [
+							{"name": "user_id", "type": "int"},
+							{"name": "bio", "type": "string"},
+							{"name": "followers", "type": "int"}
+						]
+					}
+				]
+			}
+		]
+	}`
+
+	original := &testpb.OneofWithMessageMessage{
+		Id: 1,
+		Data: &testpb.OneofWithMessageMessage_Profile{
+			Profile: &testpb.SimpleProfile{
+				UserId:    100,
+				Bio:       "Software Developer",
+				Followers: 1500,
+			},
+		},
+	}
+
+	data, err := avro.Marshal(avro.MustParse(schema), original)
+	require.NoError(t, err)
+
+	var decoded testpb.OneofWithMessageMessage
+	err = avro.Unmarshal(avro.MustParse(schema), data, &decoded)
+	require.NoError(t, err)
+
+	assert.Equal(t, original.Id, decoded.Id)
+	require.NotNil(t, decoded.Data)
+	profileValue, ok := decoded.Data.(*testpb.OneofWithMessageMessage_Profile)
+	require.True(t, ok)
+	require.NotNil(t, profileValue.Profile)
+	assert.Equal(t, int32(100), profileValue.Profile.UserId)
+	assert.Equal(t, "Software Developer", profileValue.Profile.Bio)
+	assert.Equal(t, int32(1500), profileValue.Profile.Followers)
+}

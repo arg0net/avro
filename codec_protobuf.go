@@ -209,7 +209,13 @@ func (c *protobufCodec) fieldMatchesSchema(field protoreflect.FieldDescriptor, s
 	case Bytes:
 		return kind == protoreflect.BytesKind
 	case Record:
-		return kind == protoreflect.MessageKind
+		if kind != protoreflect.MessageKind {
+			return false
+		}
+		// For Record types, also check that the message type name matches
+		recordSchema := schema.(*RecordSchema)
+		msgDesc := field.Message()
+		return string(msgDesc.Name()) == recordSchema.Name()
 	default:
 		return false
 	}

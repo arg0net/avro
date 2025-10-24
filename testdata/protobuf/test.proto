@@ -59,6 +59,13 @@ message OptionalMessage {
   optional int32 age = 3;
 }
 
+// SimpleProfile is a simple message for testing
+message SimpleProfile {
+  int32 user_id = 1;
+  string bio = 2;
+  int32 followers = 3;
+}
+
 // EnumMessage contains an enum field
 enum Status {
   STATUS_UNSPECIFIED = 0;
@@ -87,6 +94,7 @@ message OneofWithMessageMessage {
   oneof data {
     string description = 2;
     BasicMessage user = 3;
+    SimpleProfile profile = 4;
   }
 }
 
