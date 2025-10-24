@@ -466,11 +466,11 @@ if err != nil {
 - **Enum Fields**: Can be encoded as either int (enum number) or string (enum name)
 - **All Numeric Types**: All protobuf integer and floating-point types are supported
 - **Optional Fields**: Proto3 optional fields automatically map to Avro nullable unions
+- **Oneof Fields**: Proto3 oneof fields map to Avro nullable unions
 
 ### Limitations
 
 - Field names must match exactly between protobuf definition and Avro schema
-- Oneof fields require careful schema design (typically map to nullable unions)
 - Map keys must be strings (protobuf limitation for complex key types)
 
 ### Nested Messages Example
@@ -550,6 +550,56 @@ avro.Unmarshal(schema, data, &decoded)
 // decoded.Age will be nil
 ```
 
+### Oneof Fields Example
+
+Protobuf oneof fields are automatically mapped to Avro nullable unions. Oneof fields are always nullable since none of the options might be set:
+
+```protobuf
+message Event {
+  int32 id = 1;
+  oneof payload {
+    string message = 2;
+    int32 code = 3;
+    bool flag = 4;
+  }
+}
+```
+
+```json
+{
+    "type": "record",
+    "name": "Event",
+    "fields": [
+        {"name": "id", "type": "int"},
+        {"name": "payload", "type": ["null", "string", "int", "boolean"]}
+    ]
+}
+```
+
+When encoding, the library automatically determines which field in the oneof is set and writes the corresponding union type. When no field is set, it writes null:
+
+```go
+// Oneof with message field set
+event1 := &pb.Event{
+    Id:      1,
+    Payload: &pb.Event_Message{Message: "hello"},
+}
+
+// Oneof with code field set
+event2 := &pb.Event{
+    Id:      2,
+    Payload: &pb.Event_Code{Code: 404},
+}
+
+// Oneof not set (null)
+event3 := &pb.Event{
+    Id:      3,
+    Payload: nil,
+}
+
+// All encode and decode correctly
+```
+
 ## Testing
 
 The implementation includes comprehensive tests covering:
@@ -559,7 +609,7 @@ The implementation includes comprehensive tests covering:
 - Round-trip encoding/decoding
 - Integration with encoders/decoders
 - External package usage
-- Protobuf messages (basic, nested, arrays, maps, enums, optional fields)
+- Protobuf messages (basic, nested, arrays, maps, enums, optional fields, oneof fields)
 
 See `codec_marshaler_avro_test.go`, `example_external_package_test.go`, and `codec_protobuf_test.go` for test examples.
 

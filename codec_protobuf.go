@@ -70,9 +70,39 @@ func (c *protobufCodec) Decode(ptr unsafe.Pointer, r *Reader) {
 func (c *protobufCodec) decodeMessage(msgReflect protoreflect.Message, r *Reader) error {
 	msgDesc := msgReflect.Descriptor()
 	fields := msgDesc.Fields()
+	oneofs := msgDesc.Oneofs()
+
+	// Track which oneofs we've processed
+	processedOneofs := make(map[protoreflect.OneofDescriptor]bool)
 
 	// Iterate through Avro schema fields in order
 	for _, avroField := range c.schema.Fields() {
+		// Check if this Avro field maps to a real oneof (not a synthetic one used for optional fields)
+		var oneofDesc protoreflect.OneofDescriptor
+		for i := 0; i < oneofs.Len(); i++ {
+			oneof := oneofs.Get(i)
+			// Skip synthetic oneofs (used for optional fields in proto3)
+			if oneof.IsSynthetic() {
+				continue
+			}
+			if string(oneof.Name()) == avroField.Name() {
+				oneofDesc = oneof
+				break
+			}
+		}
+
+		if oneofDesc != nil && !processedOneofs[oneofDesc] {
+			// Handle oneof field
+			processedOneofs[oneofDesc] = true
+			if err := c.decodeOneofField(msgReflect, oneofDesc, avroField.Type(), r); err != nil {
+				return err
+			}
+			if r.Error != nil {
+				return r.Error
+			}
+			continue
+		}
+
 		// Find corresponding protobuf field by name
 		protoField := fields.ByName(protoreflect.Name(avroField.Name()))
 		if protoField == nil {
@@ -85,6 +115,12 @@ func (c *protobufCodec) decodeMessage(msgReflect protoreflect.Message, r *Reader
 			continue
 		}
 
+		// Skip if field is part of a real oneof (not synthetic - already handled above)
+		containingOneof := protoField.ContainingOneof()
+		if containingOneof != nil && !containingOneof.IsSynthetic() {
+			continue
+		}
+
 		// Read value from Avro and set it in protobuf message
 		if err := c.decodeField(msgReflect, protoField, avroField.Type(), r); err != nil {
 			return err
@@ -94,6 +130,89 @@ func (c *protobufCodec) decodeMessage(msgReflect protoreflect.Message, r *Reader
 		}
 	}
 	return nil
+}
+
+func (c *protobufCodec) decodeOneofField(msg protoreflect.Message, oneof protoreflect.OneofDescriptor, avroSchema Schema, r *Reader) error {
+	if avroSchema.Type() != Union {
+		return fmt.Errorf("expected union schema for oneof %s, got %s", oneof.Name(), avroSchema.Type())
+	}
+
+	unionSchema := avroSchema.(*UnionSchema)
+
+	// Read union index
+	index := r.ReadLong()
+	if index < 0 || index >= int64(len(unionSchema.Types())) {
+		return fmt.Errorf("invalid union index %d for oneof %s", index, oneof.Name())
+	}
+
+	selectedSchema := unionSchema.Types()[index]
+
+	// Handle null case - oneof fields are always nullable
+	if selectedSchema.Type() == Null {
+		// Clear any field that might be set in the oneof
+		whichField := msg.WhichOneof(oneof)
+		if whichField != nil {
+			msg.Clear(whichField)
+		}
+		return nil
+	}
+
+	// Find which field in the oneof corresponds to this union type
+	oneofFields := oneof.Fields()
+	var selectedField protoreflect.FieldDescriptor
+
+	for i := 0; i < oneofFields.Len(); i++ {
+		field := oneofFields.Get(i)
+		if c.fieldMatchesSchema(field, selectedSchema) {
+			selectedField = field
+			break
+		}
+	}
+
+	if selectedField == nil {
+		return fmt.Errorf("no matching field found in oneof %s for union type %s", oneof.Name(), selectedSchema.Type())
+	}
+
+	// Decode the value for the selected field
+	val, err := c.decodeValue(msg, selectedField, selectedSchema, r)
+	if err != nil {
+		return err
+	}
+
+	if val.IsValid() {
+		msg.Set(selectedField, val)
+	}
+
+	return nil
+}
+
+func (c *protobufCodec) fieldMatchesSchema(field protoreflect.FieldDescriptor, schema Schema) bool {
+	kind := field.Kind()
+
+	switch schema.Type() {
+	case Int:
+		return kind == protoreflect.Int32Kind || kind == protoreflect.Sint32Kind ||
+			kind == protoreflect.Sfixed32Kind || kind == protoreflect.Uint32Kind ||
+			kind == protoreflect.Fixed32Kind || kind == protoreflect.EnumKind
+	case Long:
+		return kind == protoreflect.Int64Kind || kind == protoreflect.Sint64Kind ||
+			kind == protoreflect.Sfixed64Kind || kind == protoreflect.Uint64Kind ||
+			kind == protoreflect.Fixed64Kind
+	case Float:
+		return kind == protoreflect.FloatKind
+	case Double:
+		return kind == protoreflect.DoubleKind
+	case Boolean:
+		return kind == protoreflect.BoolKind
+	case String:
+		return kind == protoreflect.StringKind || kind == protoreflect.EnumKind
+	case Bytes:
+		return kind == protoreflect.BytesKind
+	case Record:
+		return kind == protoreflect.MessageKind
+	default:
+		return false
+	}
 }
 
 func (c *protobufCodec) decodeField(msg protoreflect.Message, field protoreflect.FieldDescriptor, avroSchema Schema, r *Reader) error {
@@ -294,18 +413,6 @@ func (c *protobufCodec) decodeValue(msg protoreflect.Message, field protoreflect
 		}
 		return protoreflect.ValueOfMessage(nestedMsg), nil
 
-	case Union:
-		unionSchema := avroSchema.(*UnionSchema)
-		index := r.ReadLong()
-		if index < 0 || index >= int64(len(unionSchema.Types())) {
-			return protoreflect.Value{}, fmt.Errorf("invalid union index %d", index)
-		}
-		selectedSchema := unionSchema.Types()[index]
-		if selectedSchema.Type() == Null {
-			return protoreflect.Value{}, nil // Return invalid value for null
-		}
-		return c.decodeValue(msg, field, selectedSchema, r)
-
 	default:
 		return protoreflect.Value{}, fmt.Errorf("unsupported avro type %s for protobuf field %s", avroSchema.Type(), field.Name())
 	}
@@ -329,9 +436,39 @@ func (c *protobufCodec) Encode(ptr unsafe.Pointer, w *Writer) {
 func (c *protobufCodec) encodeMessage(msgReflect protoreflect.Message, w *Writer) error {
 	msgDesc := msgReflect.Descriptor()
 	fields := msgDesc.Fields()
+	oneofs := msgDesc.Oneofs()
+
+	// Track which oneofs we've processed
+	processedOneofs := make(map[protoreflect.OneofDescriptor]bool)
 
 	// Iterate through Avro schema fields in order
 	for _, avroField := range c.schema.Fields() {
+		// Check if this Avro field maps to a real oneof (not a synthetic one used for optional fields)
+		var oneofDesc protoreflect.OneofDescriptor
+		for i := 0; i < oneofs.Len(); i++ {
+			oneof := oneofs.Get(i)
+			// Skip synthetic oneofs (used for optional fields in proto3)
+			if oneof.IsSynthetic() {
+				continue
+			}
+			if string(oneof.Name()) == avroField.Name() {
+				oneofDesc = oneof
+				break
+			}
+		}
+
+		if oneofDesc != nil && !processedOneofs[oneofDesc] {
+			// Handle oneof field
+			processedOneofs[oneofDesc] = true
+			if err := c.encodeOneofField(msgReflect, oneofDesc, avroField.Type(), w); err != nil {
+				return err
+			}
+			if w.Error != nil {
+				return w.Error
+			}
+			continue
+		}
+
 		// Find corresponding protobuf field by name
 		protoField := fields.ByName(protoreflect.Name(avroField.Name()))
 		if protoField == nil {
@@ -352,6 +489,12 @@ func (c *protobufCodec) encodeMessage(msgReflect protoreflect.Message, w *Writer
 			return fmt.Errorf("required field %s not found in protobuf message", avroField.Name())
 		}
 
+		// Skip if field is part of a real oneof (not synthetic - already handled above)
+		containingOneof := protoField.ContainingOneof()
+		if containingOneof != nil && !containingOneof.IsSynthetic() {
+			continue
+		}
+
 		// Encode the field value
 		if err := c.encodeField(msgReflect, protoField, avroField.Type(), w); err != nil {
 			return err
@@ -361,6 +504,55 @@ func (c *protobufCodec) encodeMessage(msgReflect protoreflect.Message, w *Writer
 		}
 	}
 	return nil
+}
+
+func (c *protobufCodec) encodeOneofField(msg protoreflect.Message, oneof protoreflect.OneofDescriptor, avroSchema Schema, w *Writer) error {
+	if avroSchema.Type() != Union {
+		return fmt.Errorf("expected union schema for oneof %s, got %s", oneof.Name(), avroSchema.Type())
+	}
+
+	unionSchema := avroSchema.(*UnionSchema)
+
+	// Check which field in the oneof is set (if any)
+	whichField := msg.WhichOneof(oneof)
+
+	if whichField == nil {
+		// No field is set - oneof is null
+		// Find null index in union
+		for i, t := range unionSchema.Types() {
+			if t.Type() == Null {
+				w.WriteLong(int64(i))
+				return nil
+			}
+		}
+		return fmt.Errorf("oneof %s is not set but union schema has no null type", oneof.Name())
+	}
+
+	// Find which union type corresponds to the set field
+	var unionIndex int = -1
+	var selectedSchema Schema
+
+	for i, schema := range unionSchema.Types() {
+		if schema.Type() == Null {
+			continue
+		}
+		if c.fieldMatchesSchema(whichField, schema) {
+			unionIndex = i
+			selectedSchema = schema
+			break
+		}
+	}
+
+	if unionIndex == -1 {
+		return fmt.Errorf("no matching union type found for oneof field %s", whichField.Name())
+	}
+
+	// Write the union index
+	w.WriteLong(int64(unionIndex))
+
+	// Encode the value
+	val := msg.Get(whichField)
+	return c.encodeValue(msg, whichField, val, selectedSchema, w)
 }
 
 func (c *protobufCodec) encodeField(msg protoreflect.Message, field protoreflect.FieldDescriptor, avroSchema Schema, w *Writer) error {
@@ -529,26 +721,6 @@ func (c *protobufCodec) encodeValue(msg protoreflect.Message, field protoreflect
 		if err := nestedCodec.encodeMessage(nestedMsgReflect, w); err != nil {
 			return err
 		}
-
-	case Union:
-		unionSchema := avroSchema.(*UnionSchema)
-		// Check if value is set (for optional fields)
-		if !msg.Has(field) {
-			// Field is not set, write null if union is nullable
-			if unionSchema.Nullable() {
-				w.WriteLong(0) // null type index
-				return nil
-			}
-			return fmt.Errorf("field %s is not set and union is not nullable", field.Name())
-		}
-		// Find non-null type in union and write it
-		for i, t := range unionSchema.Types() {
-			if t.Type() != Null {
-				w.WriteLong(int64(i))
-				return c.encodeValue(msg, field, val, t, w)
-			}
-		}
-		return fmt.Errorf("no non-null type found in union for field %s", field.Name())
 
 	default:
 		return fmt.Errorf("unsupported avro type %s for protobuf field %s", avroSchema.Type(), field.Name())

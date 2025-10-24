@@ -71,3 +71,22 @@ message EnumMessage {
   Status status = 2;
 }
 
+// OneofMessage contains oneof fields
+message OneofMessage {
+  int32 id = 1;
+  oneof value {
+    string text = 2;
+    int32 number = 3;
+    bool flag = 4;
+  }
+}
+
+// OneofWithMessageMessage contains oneof with nested message
+message OneofWithMessageMessage {
+  int32 id = 1;
+  oneof data {
+    string description = 2;
+    BasicMessage user = 3;
+  }
+}
+

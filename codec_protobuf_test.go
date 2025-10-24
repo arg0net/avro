@@ -754,3 +754,451 @@ func TestProtobuf_OptionalMessage_RoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestProtobuf_OneofMessage_Text(t *testing.T) {
+	defer ConfigTeardown()
+
+	schema := `{
+		"type": "record",
+		"name": "OneofMessage",
+		"fields": [
+			{"name": "id", "type": "int"},
+			{"name": "value", "type": ["null", "string", "int", "boolean"]}
+		]
+	}`
+
+	original := &testpb.OneofMessage{
+		Id:    1,
+		Value: &testpb.OneofMessage_Text{Text: "hello"},
+	}
+
+	data, err := avro.Marshal(avro.MustParse(schema), original)
+	require.NoError(t, err)
+
+	var decoded testpb.OneofMessage
+	err = avro.Unmarshal(avro.MustParse(schema), data, &decoded)
+	require.NoError(t, err)
+
+	assert.Equal(t, original.Id, decoded.Id)
+	require.NotNil(t, decoded.Value)
+	textValue, ok := decoded.Value.(*testpb.OneofMessage_Text)
+	require.True(t, ok)
+	assert.Equal(t, "hello", textValue.Text)
+}
+
+func TestProtobuf_OneofMessage_Number(t *testing.T) {
+	defer ConfigTeardown()
+
+	schema := `{
+		"type": "record",
+		"name": "OneofMessage",
+		"fields": [
+			{"name": "id", "type": "int"},
+			{"name": "value", "type": ["null", "string", "int", "boolean"]}
+		]
+	}`
+
+	original := &testpb.OneofMessage{
+		Id:    2,
+		Value: &testpb.OneofMessage_Number{Number: 42},
+	}
+
+	data, err := avro.Marshal(avro.MustParse(schema), original)
+	require.NoError(t, err)
+
+	var decoded testpb.OneofMessage
+	err = avro.Unmarshal(avro.MustParse(schema), data, &decoded)
+	require.NoError(t, err)
+
+	assert.Equal(t, original.Id, decoded.Id)
+	require.NotNil(t, decoded.Value)
+	numberValue, ok := decoded.Value.(*testpb.OneofMessage_Number)
+	require.True(t, ok)
+	assert.Equal(t, int32(42), numberValue.Number)
+}
+
+func TestProtobuf_OneofMessage_Flag(t *testing.T) {
+	defer ConfigTeardown()
+
+	schema := `{
+		"type": "record",
+		"name": "OneofMessage",
+		"fields": [
+			{"name": "id", "type": "int"},
+			{"name": "value", "type": ["null", "string", "int", "boolean"]}
+		]
+	}`
+
+	original := &testpb.OneofMessage{
+		Id:    3,
+		Value: &testpb.OneofMessage_Flag{Flag: true},
+	}
+
+	data, err := avro.Marshal(avro.MustParse(schema), original)
+	require.NoError(t, err)
+
+	var decoded testpb.OneofMessage
+	err = avro.Unmarshal(avro.MustParse(schema), data, &decoded)
+	require.NoError(t, err)
+
+	assert.Equal(t, original.Id, decoded.Id)
+	require.NotNil(t, decoded.Value)
+	flagValue, ok := decoded.Value.(*testpb.OneofMessage_Flag)
+	require.True(t, ok)
+	assert.Equal(t, true, flagValue.Flag)
+}
+
+func TestProtobuf_OneofMessage_Null(t *testing.T) {
+	defer ConfigTeardown()
+
+	schema := `{
+		"type": "record",
+		"name": "OneofMessage",
+		"fields": [
+			{"name": "id", "type": "int"},
+			{"name": "value", "type": ["null", "string", "int", "boolean"]}
+		]
+	}`
+
+	// Oneof is not set - should be null
+	original := &testpb.OneofMessage{
+		Id:    4,
+		Value: nil,
+	}
+
+	data, err := avro.Marshal(avro.MustParse(schema), original)
+	require.NoError(t, err)
+
+	var decoded testpb.OneofMessage
+	err = avro.Unmarshal(avro.MustParse(schema), data, &decoded)
+	require.NoError(t, err)
+
+	assert.Equal(t, original.Id, decoded.Id)
+	assert.Nil(t, decoded.Value)
+}
+
+func TestProtobuf_OneofMessage_RoundTrip(t *testing.T) {
+	defer ConfigTeardown()
+
+	schema := `{
+		"type": "record",
+		"name": "OneofMessage",
+		"fields": [
+			{"name": "id", "type": "int"},
+			{"name": "value", "type": ["null", "string", "int", "boolean"]}
+		]
+	}`
+
+	testCases := []struct {
+		name    string
+		message *testpb.OneofMessage
+	}{
+		{
+			name:    "null",
+			message: &testpb.OneofMessage{Id: 1, Value: nil},
+		},
+		{
+			name:    "text",
+			message: &testpb.OneofMessage{Id: 2, Value: &testpb.OneofMessage_Text{Text: "world"}},
+		},
+		{
+			name:    "number",
+			message: &testpb.OneofMessage{Id: 3, Value: &testpb.OneofMessage_Number{Number: 99}},
+		},
+		{
+			name:    "flag_true",
+			message: &testpb.OneofMessage{Id: 4, Value: &testpb.OneofMessage_Flag{Flag: true}},
+		},
+		{
+			name:    "flag_false",
+			message: &testpb.OneofMessage{Id: 5, Value: &testpb.OneofMessage_Flag{Flag: false}},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := avro.Marshal(avro.MustParse(schema), tc.message)
+			require.NoError(t, err)
+
+			var decoded testpb.OneofMessage
+			err = avro.Unmarshal(avro.MustParse(schema), data, &decoded)
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.message.Id, decoded.Id)
+
+			if tc.message.Value == nil {
+				assert.Nil(t, decoded.Value)
+			} else {
+				require.NotNil(t, decoded.Value)
+
+				switch v := tc.message.Value.(type) {
+				case *testpb.OneofMessage_Text:
+					dv, ok := decoded.Value.(*testpb.OneofMessage_Text)
+					require.True(t, ok)
+					assert.Equal(t, v.Text, dv.Text)
+				case *testpb.OneofMessage_Number:
+					dv, ok := decoded.Value.(*testpb.OneofMessage_Number)
+					require.True(t, ok)
+					assert.Equal(t, v.Number, dv.Number)
+				case *testpb.OneofMessage_Flag:
+					dv, ok := decoded.Value.(*testpb.OneofMessage_Flag)
+					require.True(t, ok)
+					assert.Equal(t, v.Flag, dv.Flag)
+				}
+			}
+		})
+	}
+}
+
+func TestProtobuf_OneofWithMessageMessage_Description(t *testing.T) {
+	defer ConfigTeardown()
+
+	schema := `{
+		"type": "record",
+		"name": "OneofWithMessageMessage",
+		"fields": [
+			{"name": "id", "type": "int"},
+			{
+				"name": "data",
+				"type": [
+					"null",
+					"string",
+					{
+						"type": "record",
+						"name": "BasicMessage",
+						"fields": [
+							{"name": "id", "type": "int"},
+							{"name": "name", "type": "string"},
+							{"name": "active", "type": "boolean"},
+							{"name": "score", "type": "double"}
+						]
+					}
+				]
+			}
+		]
+	}`
+
+	original := &testpb.OneofWithMessageMessage{
+		Id:   1,
+		Data: &testpb.OneofWithMessageMessage_Description{Description: "test desc"},
+	}
+
+	data, err := avro.Marshal(avro.MustParse(schema), original)
+	require.NoError(t, err)
+
+	var decoded testpb.OneofWithMessageMessage
+	err = avro.Unmarshal(avro.MustParse(schema), data, &decoded)
+	require.NoError(t, err)
+
+	assert.Equal(t, original.Id, decoded.Id)
+	require.NotNil(t, decoded.Data)
+	descValue, ok := decoded.Data.(*testpb.OneofWithMessageMessage_Description)
+	require.True(t, ok)
+	assert.Equal(t, "test desc", descValue.Description)
+}
+
+func TestProtobuf_OneofWithMessageMessage_User(t *testing.T) {
+	defer ConfigTeardown()
+
+	schema := `{
+		"type": "record",
+		"name": "OneofWithMessageMessage",
+		"fields": [
+			{"name": "id", "type": "int"},
+			{
+				"name": "data",
+				"type": [
+					"null",
+					"string",
+					{
+						"type": "record",
+						"name": "BasicMessage",
+						"fields": [
+							{"name": "id", "type": "int"},
+							{"name": "name", "type": "string"},
+							{"name": "active", "type": "boolean"},
+							{"name": "score", "type": "double"}
+						]
+					}
+				]
+			}
+		]
+	}`
+
+	original := &testpb.OneofWithMessageMessage{
+		Id: 2,
+		Data: &testpb.OneofWithMessageMessage_User{
+			User: &testpb.BasicMessage{
+				Id:     10,
+				Name:   "John",
+				Active: true,
+				Score:  95.5,
+			},
+		},
+	}
+
+	data, err := avro.Marshal(avro.MustParse(schema), original)
+	require.NoError(t, err)
+
+	var decoded testpb.OneofWithMessageMessage
+	err = avro.Unmarshal(avro.MustParse(schema), data, &decoded)
+	require.NoError(t, err)
+
+	assert.Equal(t, original.Id, decoded.Id)
+	require.NotNil(t, decoded.Data)
+	userValue, ok := decoded.Data.(*testpb.OneofWithMessageMessage_User)
+	require.True(t, ok)
+	require.NotNil(t, userValue.User)
+	assert.Equal(t, int32(10), userValue.User.Id)
+	assert.Equal(t, "John", userValue.User.Name)
+	assert.Equal(t, true, userValue.User.Active)
+	assert.Equal(t, 95.5, userValue.User.Score)
+}
+
+func TestProtobuf_OneofWithMessageMessage_Null(t *testing.T) {
+	defer ConfigTeardown()
+
+	schema := `{
+		"type": "record",
+		"name": "OneofWithMessageMessage",
+		"fields": [
+			{"name": "id", "type": "int"},
+			{
+				"name": "data",
+				"type": [
+					"null",
+					"string",
+					{
+						"type": "record",
+						"name": "BasicMessage",
+						"fields": [
+							{"name": "id", "type": "int"},
+							{"name": "name", "type": "string"},
+							{"name": "active", "type": "boolean"},
+							{"name": "score", "type": "double"}
+						]
+					}
+				]
+			}
+		]
+	}`
+
+	original := &testpb.OneofWithMessageMessage{
+		Id:   3,
+		Data: nil,
+	}
+
+	data, err := avro.Marshal(avro.MustParse(schema), original)
+	require.NoError(t, err)
+
+	var decoded testpb.OneofWithMessageMessage
+	err = avro.Unmarshal(avro.MustParse(schema), data, &decoded)
+	require.NoError(t, err)
+
+	assert.Equal(t, original.Id, decoded.Id)
+	assert.Nil(t, decoded.Data)
+}
+
+func TestProtobuf_ExtraFieldsInAvro(t *testing.T) {
+	defer ConfigTeardown()
+
+	// Avro schema has extra fields that don't exist in the protobuf message
+	schema := `{
+		"type": "record",
+		"name": "BasicMessage",
+		"fields": [
+			{"name": "id", "type": "int"},
+			{"name": "extra_string", "type": "string"},
+			{"name": "name", "type": "string"},
+			{"name": "extra_int", "type": "int"},
+			{"name": "active", "type": "boolean"},
+			{"name": "extra_double", "type": "double"},
+			{"name": "score", "type": "double"}
+		]
+	}`
+
+	// Encode data with a regular map that includes the extra fields
+	data := map[string]any{
+		"id":           int32(42),
+		"extra_string": "this field doesn't exist in proto",
+		"name":         "John Doe",
+		"extra_int":    int32(999),
+		"active":       true,
+		"extra_double": 3.14159,
+		"score":        95.5,
+	}
+
+	encoded, err := avro.Marshal(avro.MustParse(schema), data)
+	require.NoError(t, err)
+
+	// Decode into protobuf message - should skip the extra fields
+	var decoded testpb.BasicMessage
+	err = avro.Unmarshal(avro.MustParse(schema), encoded, &decoded)
+	require.NoError(t, err)
+
+	// Only the fields that exist in both should be populated
+	assert.Equal(t, int32(42), decoded.Id)
+	assert.Equal(t, "John Doe", decoded.Name)
+	assert.Equal(t, true, decoded.Active)
+	assert.Equal(t, 95.5, decoded.Score)
+}
+
+func TestProtobuf_ExtraComplexFieldsInAvro(t *testing.T) {
+	defer ConfigTeardown()
+
+	// Avro schema has extra complex fields (record, array, map)
+	schema := `{
+		"type": "record",
+		"name": "BasicMessage",
+		"fields": [
+			{"name": "id", "type": "int"},
+			{
+				"name": "extra_record",
+				"type": {
+					"type": "record",
+					"name": "ExtraRecord",
+					"fields": [
+						{"name": "field1", "type": "string"},
+						{"name": "field2", "type": "int"}
+					]
+				}
+			},
+			{"name": "name", "type": "string"},
+			{"name": "extra_array", "type": {"type": "array", "items": "string"}},
+			{"name": "active", "type": "boolean"},
+			{"name": "extra_map", "type": {"type": "map", "values": "int"}},
+			{"name": "score", "type": "double"}
+		]
+	}`
+
+	// Encode data with extra complex fields
+	data := map[string]any{
+		"id": int32(99),
+		"extra_record": map[string]any{
+			"field1": "nested",
+			"field2": int32(123),
+		},
+		"name":        "Jane Doe",
+		"extra_array": []any{"item1", "item2", "item3"},
+		"active":      false,
+		"extra_map": map[string]any{
+			"key1": int32(1),
+			"key2": int32(2),
+		},
+		"score": 88.5,
+	}
+
+	encoded, err := avro.Marshal(avro.MustParse(schema), data)
+	require.NoError(t, err)
+
+	// Decode into protobuf message - should skip all the extra complex fields
+	var decoded testpb.BasicMessage
+	err = avro.Unmarshal(avro.MustParse(schema), encoded, &decoded)
+	require.NoError(t, err)
+
+	// Only the fields that exist in both should be populated
+	assert.Equal(t, int32(99), decoded.Id)
+	assert.Equal(t, "Jane Doe", decoded.Name)
+	assert.Equal(t, false, decoded.Active)
+	assert.Equal(t, 88.5, decoded.Score)
+}
