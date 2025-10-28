@@ -785,3 +785,243 @@ func TestEncoder_UnionResolver(t *testing.T) {
 		})
 	}
 }
+
+func TestEncoder_UnionNonPointerWithConfig_String(t *testing.T) {
+	defer ConfigTeardown()
+
+	api := avro.Config{UnionNullValueAsZero: true}.Freeze()
+
+	t.Run("non-zero value", func(t *testing.T) {
+		type TestStruct struct {
+			Field string `avro:"field"`
+		}
+
+		recordSchema := `{
+			"type": "record",
+			"name": "test",
+			"fields": [
+				{"name": "field", "type": ["null", "string"]}
+			]
+		}`
+
+		val := TestStruct{Field: "foo"}
+		data, err := api.Marshal(avro.MustParse(recordSchema), val)
+
+		require.NoError(t, err)
+		assert.Equal(t, []byte{0x02, 0x06, 0x66, 0x6F, 0x6F}, data)
+	})
+
+	t.Run("zero value encodes as non-null", func(t *testing.T) {
+		// For regular types, zero value still encodes as the value (empty string)
+		// not as null, since we can't distinguish "unset" from "set to zero"
+		type TestStruct struct {
+			Field string `avro:"field"`
+		}
+
+		recordSchema := `{
+			"type": "record",
+			"name": "test",
+			"fields": [
+				{"name": "field", "type": ["null", "string"]}
+			]
+		}`
+
+		val := TestStruct{Field: ""}
+		data, err := api.Marshal(avro.MustParse(recordSchema), val)
+
+		require.NoError(t, err)
+		// Empty string encodes as: union index 1 (string), then string length 0
+		assert.Equal(t, []byte{0x02, 0x00}, data)
+	})
+}
+
+func TestEncoder_UnionNonPointerWithConfig_Int(t *testing.T) {
+	defer ConfigTeardown()
+
+	api := avro.Config{UnionNullValueAsZero: true}.Freeze()
+
+	t.Run("non-zero value", func(t *testing.T) {
+		type TestStruct struct {
+			Field int `avro:"field"`
+		}
+
+		recordSchema := `{
+			"type": "record",
+			"name": "test",
+			"fields": [
+				{"name": "field", "type": ["null", "int"]}
+			]
+		}`
+
+		val := TestStruct{Field: 21}
+		data, err := api.Marshal(avro.MustParse(recordSchema), val)
+
+		require.NoError(t, err)
+		assert.Equal(t, []byte{0x02, 0x2A}, data)
+	})
+
+	t.Run("zero value encodes as non-null", func(t *testing.T) {
+		type TestStruct struct {
+			Field int `avro:"field"`
+		}
+
+		recordSchema := `{
+			"type": "record",
+			"name": "test",
+			"fields": [
+				{"name": "field", "type": ["null", "int"]}
+			]
+		}`
+
+		val := TestStruct{Field: 0}
+		data, err := api.Marshal(avro.MustParse(recordSchema), val)
+
+		require.NoError(t, err)
+		// Zero encodes as: union index 1 (int), then int value 0
+		assert.Equal(t, []byte{0x02, 0x00}, data)
+	})
+}
+
+func TestEncoder_UnionNonPointerWithConfig_RoundTrip(t *testing.T) {
+	defer ConfigTeardown()
+
+	api := avro.Config{UnionNullValueAsZero: true}.Freeze()
+
+	type TestStruct struct {
+		StringField string `avro:"stringField"`
+		IntField    int    `avro:"intField"`
+	}
+
+	recordSchema := `{
+		"type": "record",
+		"name": "test",
+		"fields": [
+			{"name": "stringField", "type": ["null", "string"]},
+			{"name": "intField", "type": ["null", "int"]}
+		]
+	}`
+
+	t.Run("round trip with values", func(t *testing.T) {
+		original := TestStruct{
+			StringField: "hello",
+			IntField:    42,
+		}
+
+		data, err := api.Marshal(avro.MustParse(recordSchema), original)
+		require.NoError(t, err)
+
+		var decoded TestStruct
+		err = api.Unmarshal(avro.MustParse(recordSchema), data, &decoded)
+		require.NoError(t, err)
+
+		assert.Equal(t, original, decoded)
+	})
+
+	t.Run("round trip with zero values", func(t *testing.T) {
+		original := TestStruct{
+			StringField: "",
+			IntField:    0,
+		}
+
+		data, err := api.Marshal(avro.MustParse(recordSchema), original)
+		require.NoError(t, err)
+
+		var decoded TestStruct
+		err = api.Unmarshal(avro.MustParse(recordSchema), data, &decoded)
+		require.NoError(t, err)
+
+		assert.Equal(t, original, decoded)
+	})
+
+	t.Run("round trip with null then non-null", func(t *testing.T) {
+		// Decode null value
+		nullData := []byte{0x00, 0x00} // both fields null
+		var decoded TestStruct
+		err := api.Unmarshal(avro.MustParse(recordSchema), nullData, &decoded)
+		require.NoError(t, err)
+		assert.Equal(t, "", decoded.StringField)
+		assert.Equal(t, 0, decoded.IntField)
+
+		// Now decode non-null values into the same struct
+		nonNullData := []byte{0x02, 0x08, 0x74, 0x65, 0x73, 0x74, 0x02, 0x14} // "test", 10
+		err = api.Unmarshal(avro.MustParse(recordSchema), nonNullData, &decoded)
+		require.NoError(t, err)
+		assert.Equal(t, "test", decoded.StringField)
+		assert.Equal(t, 10, decoded.IntField)
+	})
+}
+
+func TestEncoder_UnionNonPointerWithConfig_PointerStillWorks(t *testing.T) {
+	defer ConfigTeardown()
+
+	// With the config enabled, pointer fields should still work as before
+	api := avro.Config{UnionNullValueAsZero: true}.Freeze()
+
+	t.Run("non-nil pointer encodes value", func(t *testing.T) {
+		type TestStruct struct {
+			Field *string `avro:"field"`
+		}
+
+		recordSchema := `{
+			"type": "record",
+			"name": "test",
+			"fields": [
+				{"name": "field", "type": ["null", "string"]}
+			]
+		}`
+
+		s := "foo"
+		val := TestStruct{Field: &s}
+		data, err := api.Marshal(avro.MustParse(recordSchema), val)
+
+		require.NoError(t, err)
+		assert.Equal(t, []byte{0x02, 0x06, 0x66, 0x6F, 0x6F}, data)
+	})
+
+	t.Run("nil pointer encodes null", func(t *testing.T) {
+		type TestStruct struct {
+			Field *string `avro:"field"`
+		}
+
+		recordSchema := `{
+			"type": "record",
+			"name": "test",
+			"fields": [
+				{"name": "field", "type": ["null", "string"]}
+			]
+		}`
+
+		val := TestStruct{Field: nil}
+		data, err := api.Marshal(avro.MustParse(recordSchema), val)
+
+		require.NoError(t, err)
+		assert.Equal(t, []byte{0x00}, data)
+	})
+}
+
+func TestEncoder_UnionNonPointerWithoutConfig_UsesResolver(t *testing.T) {
+	defer ConfigTeardown()
+
+	// Without the config, it should use the resolver (existing behavior)
+	api := avro.Config{UnionNullValueAsZero: false}.Freeze()
+	api.Register("string", "")
+
+	type TestStruct struct {
+		Field string `avro:"field"`
+	}
+
+	recordSchema := `{
+		"type": "record",
+		"name": "test",
+		"fields": [
+			{"name": "field", "type": ["null", "string"]}
+		]
+	}`
+
+	val := TestStruct{Field: "foo"}
+	data, err := api.Marshal(avro.MustParse(recordSchema), val)
+
+	require.NoError(t, err)
+	// Should encode as resolver union
+	assert.Equal(t, []byte{0x02, 0x06, 0x66, 0x6F, 0x6F}, data)
+}

@@ -862,3 +862,244 @@ func TestDecoder_UnionInterfaceInvalidSchema(t *testing.T) {
 
 	assert.Error(t, err)
 }
+
+func TestDecoder_UnionNonPointerWithConfig_String(t *testing.T) {
+	defer ConfigTeardown()
+
+	api := avro.Config{UnionNullValueAsZero: true}.Freeze()
+
+	t.Run("non-null value", func(t *testing.T) {
+		data := []byte{0x02, 0x06, 0x66, 0x6F, 0x6F} // index 1 (string), "foo"
+
+		type TestStruct struct {
+			Field string `avro:"field"`
+		}
+
+		recordSchema := `{
+			"type": "record",
+			"name": "test",
+			"fields": [
+				{"name": "field", "type": ["null", "string"]}
+			]
+		}`
+
+		var got TestStruct
+		err := api.Unmarshal(avro.MustParse(recordSchema), data, &got)
+
+		require.NoError(t, err)
+		assert.Equal(t, "foo", got.Field)
+	})
+
+	t.Run("null value leaves zero value", func(t *testing.T) {
+		data := []byte{0x00} // index 0 (null)
+
+		type TestStruct struct {
+			Field string `avro:"field"`
+		}
+
+		recordSchema := `{
+			"type": "record",
+			"name": "test",
+			"fields": [
+				{"name": "field", "type": ["null", "string"]}
+			]
+		}`
+
+		var got TestStruct
+		got.Field = "should remain empty" // Set to non-zero to verify it gets cleared/left at zero
+		err := api.Unmarshal(avro.MustParse(recordSchema), data, &got)
+
+		require.NoError(t, err)
+		assert.Equal(t, "", got.Field) // Zero value for string
+	})
+}
+
+func TestDecoder_UnionNonPointerWithConfig_Int(t *testing.T) {
+	defer ConfigTeardown()
+
+	api := avro.Config{UnionNullValueAsZero: true}.Freeze()
+
+	t.Run("non-null value", func(t *testing.T) {
+		data := []byte{0x02, 0x2A} // index 1 (int), 21
+
+		type TestStruct struct {
+			Field int `avro:"field"`
+		}
+
+		recordSchema := `{
+			"type": "record",
+			"name": "test",
+			"fields": [
+				{"name": "field", "type": ["null", "int"]}
+			]
+		}`
+
+		var got TestStruct
+		err := api.Unmarshal(avro.MustParse(recordSchema), data, &got)
+
+		require.NoError(t, err)
+		assert.Equal(t, 21, got.Field)
+	})
+
+	t.Run("null value leaves zero value", func(t *testing.T) {
+		data := []byte{0x00} // index 0 (null)
+
+		type TestStruct struct {
+			Field int `avro:"field"`
+		}
+
+		recordSchema := `{
+			"type": "record",
+			"name": "test",
+			"fields": [
+				{"name": "field", "type": ["null", "int"]}
+			]
+		}`
+
+		var got TestStruct
+		err := api.Unmarshal(avro.MustParse(recordSchema), data, &got)
+
+		require.NoError(t, err)
+		assert.Equal(t, 0, got.Field) // Zero value for int
+	})
+}
+
+func TestDecoder_UnionNonPointerWithConfig_Struct(t *testing.T) {
+	defer ConfigTeardown()
+
+	api := avro.Config{UnionNullValueAsZero: true}.Freeze()
+
+	type Inner struct {
+		Value string `avro:"value"`
+	}
+
+	t.Run("non-null nested struct", func(t *testing.T) {
+		data := []byte{0x02, 0x08, 0x74, 0x65, 0x73, 0x74} // index 1, "test"
+
+		type TestStruct struct {
+			Field Inner `avro:"field"`
+		}
+
+		recordSchema := `{
+			"type": "record",
+			"name": "test",
+			"fields": [
+				{"name": "field", "type": ["null", {
+					"type": "record",
+					"name": "inner",
+					"fields": [{"name": "value", "type": "string"}]
+				}]}
+			]
+		}`
+
+		var got TestStruct
+		err := api.Unmarshal(avro.MustParse(recordSchema), data, &got)
+
+		require.NoError(t, err)
+		assert.Equal(t, "test", got.Field.Value)
+	})
+
+	t.Run("null value leaves zero value", func(t *testing.T) {
+		data := []byte{0x00} // index 0 (null)
+
+		type TestStruct struct {
+			Field Inner `avro:"field"`
+		}
+
+		recordSchema := `{
+			"type": "record",
+			"name": "test",
+			"fields": [
+				{"name": "field", "type": ["null", {
+					"type": "record",
+					"name": "inner",
+					"fields": [{"name": "value", "type": "string"}]
+				}]}
+			]
+		}`
+
+		var got TestStruct
+		err := api.Unmarshal(avro.MustParse(recordSchema), data, &got)
+
+		require.NoError(t, err)
+		assert.Equal(t, "", got.Field.Value) // Zero value for nested struct
+	})
+}
+
+func TestDecoder_UnionNonPointerWithoutConfig_ReturnsError(t *testing.T) {
+	defer ConfigTeardown()
+
+	// Without the config, decoding to non-pointer should fail
+	api := avro.Config{UnionNullValueAsZero: false}.Freeze()
+
+	data := []byte{0x02, 0x06, 0x66, 0x6F, 0x6F} // index 1 (string), "foo"
+
+	type TestStruct struct {
+		Field string `avro:"field"`
+	}
+
+	recordSchema := `{
+		"type": "record",
+		"name": "test",
+		"fields": [
+			{"name": "field", "type": ["null", "string"]}
+		]
+	}`
+
+	var got TestStruct
+	err := api.Unmarshal(avro.MustParse(recordSchema), data, &got)
+
+	assert.Error(t, err)
+}
+
+func TestDecoder_UnionNonPointerWithConfig_PointerStillWorks(t *testing.T) {
+	defer ConfigTeardown()
+
+	// With the config enabled, pointer fields should still work
+	api := avro.Config{UnionNullValueAsZero: true}.Freeze()
+
+	t.Run("non-null pointer value", func(t *testing.T) {
+		data := []byte{0x02, 0x06, 0x66, 0x6F, 0x6F} // index 1 (string), "foo"
+
+		type TestStruct struct {
+			Field *string `avro:"field"`
+		}
+
+		recordSchema := `{
+			"type": "record",
+			"name": "test",
+			"fields": [
+				{"name": "field", "type": ["null", "string"]}
+			]
+		}`
+
+		var got TestStruct
+		err := api.Unmarshal(avro.MustParse(recordSchema), data, &got)
+
+		require.NoError(t, err)
+		require.NotNil(t, got.Field)
+		assert.Equal(t, "foo", *got.Field)
+	})
+
+	t.Run("null pointer value", func(t *testing.T) {
+		data := []byte{0x00} // index 0 (null)
+
+		type TestStruct struct {
+			Field *string `avro:"field"`
+		}
+
+		recordSchema := `{
+			"type": "record",
+			"name": "test",
+			"fields": [
+				{"name": "field", "type": ["null", "string"]}
+			]
+		}`
+
+		var got TestStruct
+		err := api.Unmarshal(avro.MustParse(recordSchema), data, &got)
+
+		require.NoError(t, err)
+		assert.Nil(t, got.Field)
+	})
+}

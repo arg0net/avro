@@ -56,6 +56,12 @@ type Config struct {
 	// allocation size by default.
 	// If this size is exceeded, the decoder returns an error.
 	MaxSliceAllocSize int
+
+	// UnionNullValueAsZero allows decoding nullable union types (e.g., ["null", "string"])
+	// to non-pointer struct fields. When enabled and a null value is encountered, the field
+	// is left at its zero value instead of requiring a pointer type.
+	// This defaults to false for backward compatibility.
+	UnionNullValueAsZero bool
 }
 
 // Freeze makes the configuration immutable.

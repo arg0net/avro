@@ -50,7 +50,16 @@ func createDecoderOfUnion(d *decoderContext, schema *UnionSchema, typ reflect2.T
 			return dec
 		}
 	case reflect.Struct:
+		// If config allows nullable unions with non-pointer types, handle struct directly
+		if schema.Nullable() && d.cfg.config.UnionNullValueAsZero {
+			return decoderOfNullableUnion(d, schema, typ)
+		}
 		return createDecoderOfUnion(d, schema, reflect2.PtrTo(typ))
+	}
+
+	// If config allows, handle non-pointer types with nullable unions
+	if schema.Nullable() && d.cfg.config.UnionNullValueAsZero {
+		return decoderOfNullableUnion(d, schema, typ)
 	}
 
 	return &errorDecoder{err: fmt.Errorf("avro: %s is unsupported for Avro %s", typ.String(), schema.Type())}
@@ -77,6 +86,11 @@ func createEncoderOfUnion(e *encoderContext, schema *UnionSchema, typ reflect2.T
 		if !schema.Nullable() {
 			break
 		}
+		return encoderOfNullableUnion(e, schema, typ)
+	}
+
+	// If config allows, handle non-pointer types with nullable unions
+	if schema.Nullable() && e.cfg.config.UnionNullValueAsZero {
 		return encoderOfNullableUnion(e, schema, typ)
 	}
 
@@ -204,6 +218,7 @@ func decoderOfNullableUnion(d *decoderContext, schema Schema, typ reflect2.Type)
 	var (
 		baseTyp reflect2.Type
 		isPtr   bool
+		isSlice bool
 	)
 	switch v := typ.(type) {
 	case *reflect2.UnsafePtrType:
@@ -211,6 +226,11 @@ func decoderOfNullableUnion(d *decoderContext, schema Schema, typ reflect2.Type)
 		isPtr = true
 	case *reflect2.UnsafeSliceType:
 		baseTyp = v
+		isSlice = true
+	default:
+		baseTyp = typ
+		isPtr = false
+		isSlice = false
 	}
 	decoder := decoderOfType(d, union.Types()[typeIdx], baseTyp)
 
@@ -218,6 +238,7 @@ func decoderOfNullableUnion(d *decoderContext, schema Schema, typ reflect2.Type)
 		schema:  union,
 		typ:     baseTyp,
 		isPtr:   isPtr,
+		isSlice: isSlice,
 		decoder: decoder,
 	}
 }
@@ -226,6 +247,7 @@ type unionNullableDecoder struct {
 	schema  *UnionSchema
 	typ     reflect2.Type
 	isPtr   bool
+	isSlice bool
 	decoder ValDecoder
 }
 
@@ -236,12 +258,17 @@ func (d *unionNullableDecoder) Decode(ptr unsafe.Pointer, r *Reader) {
 	}
 
 	if schema.Type() == Null {
-		*((*unsafe.Pointer)(ptr)) = nil
+		if d.isPtr || d.isSlice {
+			*((*unsafe.Pointer)(ptr)) = nil
+		} else {
+			// For regular types, explicitly zero out the value
+			d.typ.UnsafeSet(ptr, d.typ.UnsafeNew())
+		}
 		return
 	}
 
 	defer func() {
-		if !d.isPtr {
+		if !d.isPtr && d.isSlice {
 			obj := d.typ.UnsafeIndirect(ptr)
 			obj, err := r.cfg.typeConverters.DecodeTypeConvert(obj, d.schema)
 			if errors.Is(err, errNoTypeConverter) {
@@ -257,19 +284,36 @@ func (d *unionNullableDecoder) Decode(ptr unsafe.Pointer, r *Reader) {
 			d.typ.UnsafeSet(ptr, reflect2.PtrOf(obj))
 			return
 		}
-		obj := d.typ.UnsafeIndirect(*((*unsafe.Pointer)(ptr)))
-		obj, err := r.cfg.typeConverters.DecodeTypeConvert(obj, d.schema)
-		if errors.Is(err, errNoTypeConverter) {
+		if d.isPtr {
+			obj := d.typ.UnsafeIndirect(*((*unsafe.Pointer)(ptr)))
+			obj, err := r.cfg.typeConverters.DecodeTypeConvert(obj, d.schema)
+			if errors.Is(err, errNoTypeConverter) {
+				return
+			}
+			if err != nil {
+				r.Error = err
+			}
+			*((*unsafe.Pointer)(ptr)) = reflect2.PtrOf(obj)
 			return
 		}
-		if err != nil {
-			r.Error = err
+		// For regular types, apply type converter in place
+		if d.typ.Kind() != reflect.Struct {
+			obj := d.typ.UnsafeIndirect(ptr)
+			obj, err := r.cfg.typeConverters.DecodeTypeConvert(obj, d.schema)
+			if errors.Is(err, errNoTypeConverter) {
+				return
+			}
+			if err != nil {
+				r.Error = err
+			}
+			if obj != nil {
+				d.typ.UnsafeSet(ptr, reflect2.PtrOf(obj))
+			}
 		}
-		*((*unsafe.Pointer)(ptr)) = reflect2.PtrOf(obj)
 	}()
 
-	// Handle the non-ptr case separately.
-	if !d.isPtr {
+	// Handle the slice case separately.
+	if d.isSlice {
 		if d.typ.UnsafeIsNil(ptr) {
 			// Create a new instance.
 			newPtr := d.typ.UnsafeNew()
@@ -279,6 +323,13 @@ func (d *unionNullableDecoder) Decode(ptr unsafe.Pointer, r *Reader) {
 		}
 
 		// Reuse the existing instance.
+		d.decoder.Decode(ptr, r)
+		return
+	}
+
+	// Handle regular non-pointer types.
+	if !d.isPtr {
+		// Decode directly into the field
 		d.decoder.Decode(ptr, r)
 		return
 	}
@@ -358,6 +409,7 @@ func encoderOfNullableUnion(e *encoderContext, schema Schema, typ reflect2.Type)
 	var (
 		baseTyp reflect2.Type
 		isPtr   bool
+		isSlice bool
 	)
 	switch v := typ.(type) {
 	case *reflect2.UnsafePtrType:
@@ -365,13 +417,20 @@ func encoderOfNullableUnion(e *encoderContext, schema Schema, typ reflect2.Type)
 		isPtr = true
 	case *reflect2.UnsafeSliceType:
 		baseTyp = v
+		isSlice = true
+	default:
+		baseTyp = typ
+		isPtr = false
+		isSlice = false
 	}
 	encoder := encoderOfType(e, union.Types()[typeIdx], baseTyp)
 
 	return &unionNullableEncoder{
 		schema:  union,
+		typ:     baseTyp,
 		encoder: encoder,
 		isPtr:   isPtr,
+		isSlice: isSlice,
 		nullIdx: int32(nullIdx),
 		typeIdx: int32(typeIdx),
 	}
@@ -379,24 +438,40 @@ func encoderOfNullableUnion(e *encoderContext, schema Schema, typ reflect2.Type)
 
 type unionNullableEncoder struct {
 	schema  *UnionSchema
+	typ     reflect2.Type
 	encoder ValEncoder
 	isPtr   bool
+	isSlice bool
 	nullIdx int32
 	typeIdx int32
 }
 
 func (e *unionNullableEncoder) Encode(ptr unsafe.Pointer, w *Writer) {
-	if *((*unsafe.Pointer)(ptr)) == nil {
+	// Handle pointer and slice types - check for nil
+	if e.isPtr || e.isSlice {
+		if *((*unsafe.Pointer)(ptr)) == nil {
+			w.WriteInt(e.nullIdx)
+			return
+		}
+
+		w.WriteInt(e.typeIdx)
+		newPtr := ptr
+		if e.isPtr {
+			newPtr = *((*unsafe.Pointer)(ptr))
+		}
+		e.encoder.Encode(newPtr, w)
+		return
+	}
+
+	// Handle regular types - check for zero value
+	if e.typ.IsNullable() && reflect2.IsNil(e.typ.UnsafeIndirect(ptr)) {
 		w.WriteInt(e.nullIdx)
 		return
 	}
 
+	// For regular types, always encode the value (even if zero)
 	w.WriteInt(e.typeIdx)
-	newPtr := ptr
-	if e.isPtr {
-		newPtr = *((*unsafe.Pointer)(ptr))
-	}
-	e.encoder.Encode(newPtr, w)
+	e.encoder.Encode(ptr, w)
 }
 
 func decoderOfResolvedUnion(d *decoderContext, schema Schema, _ reflect2.Type) (ValDecoder, error) {
